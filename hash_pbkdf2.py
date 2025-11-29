@@ -5,7 +5,6 @@ Attempts to crack PBKDF2-SHA256 hashes using a wordlist.
 """
 
 import hashlib
-import base64
 import argparse
 import sys
 import time
@@ -16,41 +15,40 @@ def parse_hash(hash_string: str) -> tuple:
     """
     Parse a PBKDF2 hash string into its components.
     
-    Format: pbkdf2:sha256:iterations$salt_b64$hash_b64
+    Format: pbkdf2:sha256:iterations$salt$hash_hex
     
     Returns:
-        tuple: (algorithm, iterations, salt, expected_hash)
+        tuple: (algorithm, iterations, salt_bytes, expected_hash_hex)
     """
     try:
         parts = hash_string.split('$')
         if len(parts) != 3:
-            raise ValueError("Invalid hash format")
+            raise ValueError("Invalid hash format - expected 3 parts separated by $")
         
         header = parts[0]
-        salt_b64 = parts[1]
-        hash_b64 = parts[2]
+        salt_str = parts[1]
+        hash_hex = parts[2]
         
         # Parse header (pbkdf2:sha256:iterations)
         header_parts = header.split(':')
         if len(header_parts) != 3 or header_parts[0] != 'pbkdf2':
-            raise ValueError("Invalid hash format")
+            raise ValueError("Invalid hash format - header should be pbkdf2:algorithm:iterations")
         
         algorithm = header_parts[1]
         iterations = int(header_parts[2])
         
-        # Decode base64 values
-        salt = base64.b64decode(salt_b64)
-        expected_hash = base64.b64decode(hash_b64)
+        # Salt is used as raw bytes (ASCII encoded)
+        salt = salt_str.encode('ascii')
         
-        return algorithm, iterations, salt, expected_hash
+        return algorithm, iterations, salt, hash_hex
     
     except Exception as e:
         print(f"[!] Error parsing hash: {e}")
         sys.exit(1)
 
-def hash_password(password: str, algorithm: str, iterations: int, salt: bytes) -> bytes:
+def hash_password(password: str, algorithm: str, iterations: int, salt: bytes) -> str:
     """
-    Hash a password using PBKDF2.
+    Hash a password using PBKDF2 and return hex string.
     
     Args:
         password: Password to hash
@@ -59,31 +57,30 @@ def hash_password(password: str, algorithm: str, iterations: int, salt: bytes) -
         salt: Salt bytes
         
     Returns:
-        bytes: Derived key
+        str: Hash in hexadecimal format
     """
-    return hashlib.pbkdf2_hmac(algorithm, password.encode(), salt, iterations)
+    dk = hashlib.pbkdf2_hmac(algorithm, password.encode(), salt, iterations, dklen=32)
+    return dk.hex()
 
-def crack_hash(wordlist_path: str, target_hash: str, verbose: bool = False) -> Optional[str]:
+def crack_hash(wordlist_path: str, target_hash: str) -> Optional[str]:
     """
     Attempt to crack a PBKDF2 hash using a wordlist.
     
     Args:
         wordlist_path: Path to wordlist file
         target_hash: Target hash string to crack
-        verbose: Print progress information
         
     Returns:
         str: Cracked password or None
     """
     # Parse the target hash
-    algorithm, iterations, salt, expected_hash = parse_hash(target_hash)
+    algorithm, iterations, salt, expected_hash_hex = parse_hash(target_hash)
     
-    print(f"[*] Target Hash: {target_hash}")
     print(f"[*] Algorithm: PBKDF2-{algorithm.upper()}")
     print(f"[*] Iterations: {iterations:,}")
-    print(f"[*] Salt: {base64.b64encode(salt).decode()}")
-    print(f"[*] Expected Hash: {base64.b64encode(expected_hash).decode()}")
-    print(f"[*] Loading wordlist: {wordlist_path}")
+    print(f"[*] Salt: {salt.decode('ascii')}")
+    print(f"[*] Expected hash: {expected_hash_hex}")
+    print(f"[*] Wordlist: {wordlist_path}")
     print()
     
     # Check if wordlist exists
@@ -92,29 +89,25 @@ def crack_hash(wordlist_path: str, target_hash: str, verbose: bool = False) -> O
         print(f"[!] Error: Wordlist file '{wordlist_path}' not found")
         sys.exit(1)
     
-    # Count total lines for progress
-    print("[*] Counting wordlist entries...", end='', flush=True)
+    # Count total lines
+    print("[*] Counting passwords...", end='', flush=True)
     with open(wordlist_file, 'r', encoding='utf-8', errors='ignore') as f:
         total_passwords = sum(1 for _ in f)
-    print(f" {total_passwords:,} passwords found")
-    print()
+    print(f" {total_passwords:,} found")
     
-    # Performance estimation
-    print("[*] Estimating performance...")
-    test_password = "test"
+    # Performance test
+    print("[*] Testing speed...", end='', flush=True)
     start_time = time.time()
-    hash_password(test_password, algorithm, iterations, salt)
+    hash_password("test", algorithm, iterations, salt)
     time_per_hash = time.time() - start_time
-    estimated_total_time = time_per_hash * total_passwords
     
-    print(f"[*] Time per hash: ~{time_per_hash:.3f} seconds")
-    print(f"[*] Estimated total time: ~{estimated_total_time/60:.1f} minutes ({estimated_total_time/3600:.1f} hours)")
-    print(f"[*] Speed: ~{1/time_per_hash:.1f} passwords/second")
+    print(f" ~{1/time_per_hash:.1f} passwords/sec")
+    print(f"[*] Estimated time: ~{(time_per_hash * total_passwords)/60:.1f} min")
     print()
-    print("[*] Starting attack...")
+    print("[*] Starting attack from line 1 to end...")
     print()
     
-    # Try each password in wordlist
+    # Attack
     try:
         with open(wordlist_file, 'r', encoding='utf-8', errors='ignore') as f:
             attempts = 0
@@ -123,24 +116,28 @@ def crack_hash(wordlist_path: str, target_hash: str, verbose: bool = False) -> O
             
             for line in f:
                 password = line.rstrip('\n\r')
+                if not password:  # Skip empty lines
+                    continue
+                    
                 attempts += 1
                 
                 # Hash the password
-                computed_hash = hash_password(password, algorithm, iterations, salt)
+                computed_hash_hex = hash_password(password, algorithm, iterations, salt)
                 
                 # Check if it matches
-                if computed_hash == expected_hash:
+                if computed_hash_hex == expected_hash_hex:
                     elapsed = time.time() - start_attack
-                    print(f"\n[+] {'='*60}")
+                    print(f"\n")
+                    print(f"[+] ════════════════════════════════════════")
                     print(f"[+] PASSWORD FOUND!")
-                    print(f"[+] {'='*60}")
+                    print(f"[+] ════════════════════════════════════════")
                     print(f"[+] Password: {password}")
-                    print(f"[+] Attempts: {attempts:,} / {total_passwords:,}")
-                    print(f"[+] Time elapsed: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
-                    print(f"[+] {'='*60}")
+                    print(f"[+] Position: Line {attempts}")
+                    print(f"[+] Time: {elapsed:.1f} seconds")
+                    print(f"[+] ════════════════════════════════════════")
                     return password
                 
-                # Progress indicator every 10 passwords or every 5 seconds
+                # Progress update
                 current_time = time.time()
                 if attempts % 10 == 0 or (current_time - last_update) >= 5:
                     elapsed = current_time - start_attack
@@ -148,25 +145,26 @@ def crack_hash(wordlist_path: str, target_hash: str, verbose: bool = False) -> O
                     rate = attempts / elapsed if elapsed > 0 else 0
                     eta = (total_passwords - attempts) / rate if rate > 0 else 0
                     
-                    print(f"[*] Progress: {attempts:,}/{total_passwords:,} ({percent:.2f}%) | "
-                          f"Speed: {rate:.2f} p/s | "
-                          f"Elapsed: {elapsed/60:.1f}m | "
+                    print(f"[*] {attempts:,}/{total_passwords:,} ({percent:.2f}%) | "
+                          f"{rate:.1f} p/s | "
+                          f"Time: {elapsed/60:.1f}m | "
                           f"ETA: {eta/60:.1f}m", 
                           end='\r', flush=True)
                     last_update = current_time
         
         elapsed = time.time() - start_attack
-        print(f"\n\n[!] Password not found after {attempts:,} attempts")
-        print(f"[!] Time elapsed: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+        print(f"\n")
+        print(f"[!] Password not found in wordlist")
+        print(f"[!] Tried {attempts:,} passwords in {elapsed/60:.1f} minutes")
         return None
     
     except KeyboardInterrupt:
         elapsed = time.time() - start_attack
-        print(f"\n\n[!] Interrupted by user after {attempts:,} attempts")
-        print(f"[!] Time elapsed: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+        print(f"\n")
+        print(f"[!] Stopped by user after {attempts:,} attempts ({elapsed/60:.1f} min)")
         sys.exit(0)
     except Exception as e:
-        print(f"\n[!] Error reading wordlist: {e}")
+        print(f"\n[!] Error: {e}")
         sys.exit(1)
 
 def main():
@@ -174,9 +172,8 @@ def main():
         description='PBKDF2 Hash Cracker - Crack PBKDF2-SHA256 hashes using a wordlist',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
-Examples:
-  %(prog)s -w wordlist.txt -hash 'pbkdf2:sha256:600000$salt$hash'
-  %(prog)s -w rockyou.txt -hash 'pbkdf2:sha256:600000$AMtzteQIG7yAbZIa$0673ad...' -v
+Example:
+  python3 hash_pbkdf2.py -w rockyou.txt -hash 'pbkdf2:sha256:600000$AMtzteQIG7yAbZIa$0673ad...'
         '''
     )
     
@@ -188,18 +185,9 @@ Examples:
                         required=True,
                         help='Target PBKDF2 hash (format: pbkdf2:algorithm:iterations$salt$hash)')
     
-    parser.add_argument('-v', '--verbose',
-                        action='store_true',
-                        help='Verbose output (show progress)')
-    
     args = parser.parse_args()
     
-    # Start cracking
-    print("[*] PBKDF2 Hash Cracker")
-    print("[*] " + "=" * 50)
-    print()
-    
-    result = crack_hash(args.wordlist, args.hash, args.verbose)
+    result = crack_hash(args.wordlist, args.hash)
     
     if result:
         sys.exit(0)
