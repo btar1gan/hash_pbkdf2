@@ -8,6 +8,7 @@ import hashlib
 import base64
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -91,10 +92,35 @@ def crack_hash(wordlist_path: str, target_hash: str, verbose: bool = False) -> O
         print(f"[!] Error: Wordlist file '{wordlist_path}' not found")
         sys.exit(1)
     
+    # Count total lines for progress
+    print("[*] Counting wordlist entries...", end='', flush=True)
+    with open(wordlist_file, 'r', encoding='utf-8', errors='ignore') as f:
+        total_passwords = sum(1 for _ in f)
+    print(f" {total_passwords:,} passwords found")
+    print()
+    
+    # Performance estimation
+    print("[*] Estimating performance...")
+    test_password = "test"
+    start_time = time.time()
+    hash_password(test_password, algorithm, iterations, salt)
+    time_per_hash = time.time() - start_time
+    estimated_total_time = time_per_hash * total_passwords
+    
+    print(f"[*] Time per hash: ~{time_per_hash:.3f} seconds")
+    print(f"[*] Estimated total time: ~{estimated_total_time/60:.1f} minutes ({estimated_total_time/3600:.1f} hours)")
+    print(f"[*] Speed: ~{1/time_per_hash:.1f} passwords/second")
+    print()
+    print("[*] Starting attack...")
+    print()
+    
     # Try each password in wordlist
     try:
         with open(wordlist_file, 'r', encoding='utf-8', errors='ignore') as f:
             attempts = 0
+            start_attack = time.time()
+            last_update = start_attack
+            
             for line in f:
                 password = line.rstrip('\n\r')
                 attempts += 1
@@ -104,22 +130,43 @@ def crack_hash(wordlist_path: str, target_hash: str, verbose: bool = False) -> O
                 
                 # Check if it matches
                 if computed_hash == expected_hash:
-                    print(f"[+] PASSWORD FOUND after {attempts:,} attempts!")
+                    elapsed = time.time() - start_attack
+                    print(f"\n[+] {'='*60}")
+                    print(f"[+] PASSWORD FOUND!")
+                    print(f"[+] {'='*60}")
                     print(f"[+] Password: {password}")
+                    print(f"[+] Attempts: {attempts:,} / {total_passwords:,}")
+                    print(f"[+] Time elapsed: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+                    print(f"[+] {'='*60}")
                     return password
                 
-                # Progress indicator
-                if verbose and attempts % 1000 == 0:
-                    print(f"[*] Tried {attempts:,} passwords...", end='\r')
+                # Progress indicator every 10 passwords or every 5 seconds
+                current_time = time.time()
+                if attempts % 10 == 0 or (current_time - last_update) >= 5:
+                    elapsed = current_time - start_attack
+                    percent = (attempts / total_passwords) * 100
+                    rate = attempts / elapsed if elapsed > 0 else 0
+                    eta = (total_passwords - attempts) / rate if rate > 0 else 0
+                    
+                    print(f"[*] Progress: {attempts:,}/{total_passwords:,} ({percent:.2f}%) | "
+                          f"Speed: {rate:.2f} p/s | "
+                          f"Elapsed: {elapsed/60:.1f}m | "
+                          f"ETA: {eta/60:.1f}m", 
+                          end='\r', flush=True)
+                    last_update = current_time
         
-        print(f"\n[!] Password not found after {attempts:,} attempts")
+        elapsed = time.time() - start_attack
+        print(f"\n\n[!] Password not found after {attempts:,} attempts")
+        print(f"[!] Time elapsed: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
         return None
     
     except KeyboardInterrupt:
-        print(f"\n[!] Interrupted by user after {attempts:,} attempts")
+        elapsed = time.time() - start_attack
+        print(f"\n\n[!] Interrupted by user after {attempts:,} attempts")
+        print(f"[!] Time elapsed: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
         sys.exit(0)
     except Exception as e:
-        print(f"[!] Error reading wordlist: {e}")
+        print(f"\n[!] Error reading wordlist: {e}")
         sys.exit(1)
 
 def main():
