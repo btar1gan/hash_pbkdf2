@@ -16,7 +16,3 @@ Python 3.6+
 ```bash
 python3 hash_pbkdf2.py -w rockyou.txt -hash 'pbkdf2:sha256:<iterations>$<salt>$<hash_hex>'
 ```
-
-
-
-For questions or issues, please open a GitHub issue.
